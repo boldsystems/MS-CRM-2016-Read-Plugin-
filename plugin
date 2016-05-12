@@ -1,0 +1,83 @@
+ public static class Globals
+    {
+       public  static Dictionary<string, long> cacheGuid = new Dictionary<string, long >();
+
+
+
+
+    }
+    public class eHealthAuditMain : IPlugin
+    {
+
+     
+
+        public void Execute(IServiceProvider serviceProvider)
+        {
+
+            if (serviceProvider == null)
+            {
+                throw new ArgumentNullException("serviceProvider");
+            }
+            // Get a reference to the tracing service.
+            ITracingService tracingService = (ITracingService)serviceProvider.GetService(typeof(ITracingService));
+            // Obtain the execution context from the service provider.
+            IPluginExecutionContext context = (IPluginExecutionContext)
+                serviceProvider.GetService(typeof(IPluginExecutionContext));
+            // Obtain the organization service reference.
+            IOrganizationServiceFactory serviceFactory = (IOrganizationServiceFactory)serviceProvider.GetService(typeof(IOrganizationServiceFactory));
+            IOrganizationService service = serviceFactory.CreateOrganizationService(context.UserId);
+            try
+            {
+                string[] operationsToAudit = new string[] { "Retrieve", "RetrieveMultiple" };
+                long longDate =  long.Parse( DateTime.Today.Year.ToString()  + DateTime.Today.Month.ToString()  + DateTime.Today.Day.ToString()  + DateTime.Today.Hour.ToString()   + DateTime.Today.Minute.ToString() );
+               
+                if ( context.Depth == 1 && context.ParentContext ==null &&  context.InputParameters.Contains("Target") && context.InputParameters["Target"] is  EntityReference
+                    && operationsToAudit.Contains(context.MessageName) &&  ( context.PrimaryEntityName.StartsWith("incident") || (context.PrimaryEntityName=="contact")) )
+                {
+                    string CacheKey = context.PrimaryEntityId.ToString() + context.PrimaryEntityId.ToString();                   
+                   if( Globals.cacheGuid.ContainsKey(CacheKey) )
+                   {
+                       //clear cache checking all values in the last 2 minutes 
+                       var toRemove =Globals.cacheGuid.Select( x => x.Value < longDate - 2 ) ; 
+                       foreach (var key in toRemove)
+                       {
+                           Globals.cacheGuid.Remove(key.ToString()  ) ; 
+                       }                       
+                   }
+                   else
+                   {
+
+                       EntityReference TargetReference = (EntityReference)context.InputParameters["Target"];
+                       Entity entity = service.Retrieve(context.PrimaryEntityName, context.PrimaryEntityId, new ColumnSet(true));
+                       Entity audit = new Entity("new_audit");
+                       audit["new_operation"] = context.MessageName;
+                       audit["new_entity"] = context.PrimaryEntityName;
+                       audit["new_name"] = context.PrimaryEntityName;
+                       audit["new_entityreferenceguid"] = context.PrimaryEntityId.ToString();
+                       switch (context.PrimaryEntityName)
+                       {
+                           case "contact":
+                               
+                               audit["new_contactid"] = new EntityReference("contact", context.PrimaryEntityId);
+                               break;
+
+                           case "incident":
+                               audit["new_caseid"] = new EntityReference("incident", context.PrimaryEntityId);
+                               break;
+                       }
+                       service.Create(audit);
+                       Globals.cacheGuid.Add( CacheKey  , longDate  );
+                   } 
+                }
+            }
+            catch (FaultException<OrganizationServiceFault> e)
+            {
+                tracingService.Trace(string.Format(CultureInfo.InvariantCulture, "Exception: {0}", e.ToString()));
+                // Handle the exception.
+                throw;
+            }
+            finally
+            {
+                tracingService.Trace(string.Format(CultureInfo.InvariantCulture, "Exiting Plugin.Execute()"));
+            }
+        }
